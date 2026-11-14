@@ -16,6 +16,17 @@ it and assert they are rejected.
 > multi-vendor auction payout registry (payments → seller earnings →
 > withdrawal claims → allocations → evidence + audit).
 
+## Sample review report
+
+[`sample-review/REPORT.md`](sample-review/REPORT.md) is an independent review
+of this lab's own schema in the format I deliver to clients: severity-ranked
+findings, reproduction SQL, a concurrency assessment, an install and recovery
+procedure, a database-vs-application split, and a verdict. It finds real gaps
+(three high-severity) rather than approving its own author's work. The
+recommended corrections are in
+[`sample-review/corrections.sql`](sample-review/corrections.sql), and CI applies
+them to a scratch database and proves each finding is closed.
+
 ## The six cases
 
 | # | Case | Guarantee | Enforced by |

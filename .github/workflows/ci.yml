@@ -80,6 +80,51 @@ jobs:
           $M ledger_partial < schema/inventory.sql
           echo "OK: partial install completed and verified"
 
+      - name: Sample review corrections apply cleanly and close each finding
+        run: |
+          M="mysql -h 127.0.0.1 -P 3306 -uroot -prootpw"
+          $M -e "CREATE DATABASE ledger_review"
+          $M ledger_review < schema/00_install.sql
+          $M ledger_review < sample-review/corrections.sql
+          $M ledger_review < sample-review/corrections.sql   # re-runnable
+          R="$M ledger_review"
+
+          # Happy path still works, and status/total are maintained (F-02, F-04).
+          $R -e "INSERT INTO payments (external_ref, amount_cents, status) VALUES ('pi_OK', 1000, 'captured');
+                 INSERT INTO seller_earnings (payment_id, seller_id, amount_cents) VALUES (LAST_INSERT_ID(), 1, 1000);
+                 SET @e = LAST_INSERT_ID();
+                 INSERT INTO withdrawal_claims (seller_id, status) VALUES (1, 'pending');
+                 SET @c = LAST_INSERT_ID();
+                 INSERT INTO source_allocations (claim_id, earning_id, seller_id, amount_cents) VALUES (@c, @e, 1, 1000);"
+          test "$($R -N -e "SELECT status FROM seller_earnings WHERE id = 1")" = "allocated"
+          test "$($R -N -e "SELECT total_cents FROM withdrawal_claims WHERE id = 1")" = "1000"
+
+          # F-03: an allocated earning's amount can no longer be changed.
+          if $R -e "UPDATE seller_earnings SET amount_cents = 900 WHERE id = 1"; then echo "F-03 open"; exit 1; fi
+          # F-03: allocations are immutable.
+          if $R -e "UPDATE source_allocations SET amount_cents = 1 WHERE id = 1"; then echo "F-03 open"; exit 1; fi
+
+          # F-01: earnings funded by a refunded payment cannot be allocated.
+          $R -e "INSERT INTO payments (external_ref, amount_cents, status) VALUES ('pi_REFUNDED', 500, 'refunded');
+                 INSERT INTO seller_earnings (payment_id, seller_id, amount_cents) VALUES (LAST_INSERT_ID(), 1, 500);"
+          if $R -e "INSERT INTO source_allocations (claim_id, earning_id, seller_id, amount_cents) VALUES (1, 2, 1, 500)"; then echo "F-01 open"; exit 1; fi
+
+          # F-02: a reversed earning cannot be allocated, even into an open claim.
+          $R -e "INSERT INTO payments (external_ref, amount_cents, status) VALUES ('pi_REV', 300, 'captured');
+                 INSERT INTO seller_earnings (payment_id, seller_id, amount_cents, status) VALUES (LAST_INSERT_ID(), 1, 300, 'reversed');"
+          if $R -e "INSERT INTO source_allocations (claim_id, earning_id, seller_id, amount_cents) VALUES (1, 3, 1, 300)"; then echo "F-02 open"; exit 1; fi
+
+          # F-05: allocations on an approved claim cannot be removed.
+          $R -e "UPDATE withdrawal_claims SET status = 'approved' WHERE id = 1"
+          if $R -e "DELETE FROM source_allocations WHERE claim_id = 1"; then echo "F-05 open"; exit 1; fi
+
+          # F-06: case-distinct provider references are both accepted.
+          $R -e "INSERT INTO payments (external_ref, amount_cents, status) VALUES ('pi_Case', 100, 'captured'), ('pi_case', 100, 'captured')"
+
+          # The original installer assertion still passes on the corrected schema.
+          $R < schema/00_install.sql
+          echo "OK: corrections apply, re-run cleanly, and close F-01..F-06"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
