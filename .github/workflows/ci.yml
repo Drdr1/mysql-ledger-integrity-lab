@@ -51,6 +51,35 @@ jobs:
       - name: Re-run installer (must be idempotent / safe after partial install)
         run: mysql -h 127.0.0.1 -P 3306 -uroot -prootpw ledger < schema/00_install.sql
 
+      - name: Installer refuses to touch a pre-existing table it does not own
+        run: |
+          M="mysql -h 127.0.0.1 -P 3306 -uroot -prootpw"
+          $M -e "CREATE DATABASE ledger_conflict;
+                 CREATE TABLE ledger_conflict.payments (id INT PRIMARY KEY, note VARCHAR(32));
+                 INSERT INTO ledger_conflict.payments VALUES (1, 'pre-existing, not ours');"
+          if $M ledger_conflict < schema/00_install.sql; then
+            echo "FAIL: installer ran over a foreign table"; exit 1
+          fi
+          # The foreign table is untouched (same 2 columns, same row) ...
+          test "$($M -N -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='ledger_conflict' AND table_name='payments'")" = "2"
+          test "$($M -N -e "SELECT note FROM ledger_conflict.payments WHERE id=1")" = "pre-existing, not ours"
+          # ... and nothing else was created.
+          test "$($M -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ledger_conflict'")" = "1"
+          test "$($M -N -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema='ledger_conflict'")" = "0"
+          echo "OK: refused, foreign table intact, nothing created"
+
+      - name: Interrupted install is completed by re-running the installer
+        run: |
+          M="mysql -h 127.0.0.1 -P 3306 -uroot -prootpw"
+          $M -e "CREATE DATABASE ledger_partial"
+          # Simulate an interruption after the tables step: no triggers, no chain head, no log.
+          $M ledger_partial < schema/01_tables.sql
+          $M ledger_partial < schema/00_install.sql
+          test "$($M -N -e "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema='ledger_partial'")" = "5"
+          test "$($M -N -e "SELECT step FROM ledger_partial.ledger_migration_log WHERE step='verified'")" = "verified"
+          $M ledger_partial < schema/inventory.sql
+          echo "OK: partial install completed and verified"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

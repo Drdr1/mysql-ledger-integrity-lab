@@ -12,6 +12,10 @@
 --   * CREATE TABLE IF NOT EXISTS so a re-run after a half-finished install is
 --     safe (see cases/case-05-partial-ddl-recovery.md: MySQL DDL auto-commits
 --     and is not transactional, so partial installs are a real risk).
+--   * Every table carries the ownership marker COMMENT='owner=ledger-registry;v=1'.
+--     The installer's preflight refuses to proceed if a table with one of these
+--     names already exists WITHOUT the marker, so it can never adopt, alter or
+--     drop an object it did not create.
 --
 -- Requires MySQL 8.0.16+ (CHECK constraints are enforced from that version;
 -- on older versions they parse but are ignored, which this lab treats as a
@@ -32,7 +36,8 @@ CREATE TABLE IF NOT EXISTS payments (
     PRIMARY KEY (id),
     UNIQUE KEY uq_payments_external_ref (external_ref),
     CONSTRAINT ck_payments_amount_positive CHECK (amount_cents > 0)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';
 
 -- 2. seller_earnings ------------------------------------------------------
 -- An amount owed to one seller, funded by one payment. This is the unit that
@@ -55,7 +60,8 @@ CREATE TABLE IF NOT EXISTS seller_earnings (
     CONSTRAINT fk_earning_payment
         FOREIGN KEY (payment_id) REFERENCES payments (id),
     CONSTRAINT ck_earning_amount_positive CHECK (amount_cents > 0)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';
 
 -- 3. withdrawal_claims ----------------------------------------------------
 -- A seller's request to be paid out a set of earnings.
@@ -70,7 +76,8 @@ CREATE TABLE IF NOT EXISTS withdrawal_claims (
     -- Composite key so an allocation can bind (claim_id, seller_id).
     UNIQUE KEY uq_claim_id_seller (id, seller_id),
     KEY idx_claim_seller_status (seller_id, status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';
 
 -- 4. source_allocations ---------------------------------------------------
 -- The join that ties ONE earning to ONE withdrawal claim. This table is where
@@ -99,7 +106,8 @@ CREATE TABLE IF NOT EXISTS source_allocations (
         FOREIGN KEY (claim_id, seller_id)
         REFERENCES withdrawal_claims (id, seller_id),
     CONSTRAINT ck_allocation_amount_positive CHECK (amount_cents > 0)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';
 
 -- 5. allocation_evidence --------------------------------------------------
 -- Supporting documents / references for an allocation (payout proof, invoice).
@@ -114,7 +122,8 @@ CREATE TABLE IF NOT EXISTS allocation_evidence (
     KEY idx_evidence_allocation (allocation_id),
     CONSTRAINT fk_evidence_allocation
         FOREIGN KEY (allocation_id) REFERENCES source_allocations (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';
 
 -- 6. audit_events ---------------------------------------------------------
 -- Append-only audit log. Immutability is enforced by triggers in
@@ -131,6 +140,10 @@ CREATE TABLE IF NOT EXISTS audit_events (
     row_hash       CHAR(64)        NOT NULL,
     created_at     DATETIME(6)     NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
+    -- No two rows may claim the same predecessor: a forked chain fails on
+    -- insert instead of silently branching (backstop for the chain-head lock).
+    UNIQUE KEY uq_audit_prev_hash (prev_hash),
     KEY idx_audit_entity (entity_type, entity_id),
     KEY idx_audit_seller (seller_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='owner=ledger-registry;v=1';

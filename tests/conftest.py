@@ -61,6 +61,8 @@ def clean_db(db):
         for table in LEDGER_TABLES:
             cur.execute(f"TRUNCATE TABLE {table}")
         cur.execute("SET FOREIGN_KEY_CHECKS = 1")
+        # The audit chain restarts from genesis, so the chain head must too.
+        cur.execute("UPDATE ledger_audit_chain_head SET last_hash = NULL WHERE id = 1")
     return db
 
 
