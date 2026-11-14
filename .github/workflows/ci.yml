@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  integrity-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: ledger
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -prootpw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: rootpw
+      DB_NAME: ledger
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -prootpw --silent; then
+              echo "mysql up"; break
+            fi
+            echo "waiting for mysql..."; sleep 2
+          done
+
+      - name: Print MySQL version (CHECK constraints need 8.0.16+)
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -prootpw -e "SELECT VERSION();"
+
+      - name: Install schema
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -prootpw ledger < schema/00_install.sql
+
+      - name: Re-run installer (must be idempotent / safe after partial install)
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -prootpw ledger < schema/00_install.sql
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install -r tests/requirements.txt
+
+      - name: Run integrity + concurrency tests
+        run: pytest -v tests/
